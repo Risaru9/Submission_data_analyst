@@ -5,26 +5,23 @@ import plotly.express as px
 # Page Configuration
 st.set_page_config(
     page_title="E-Commerce Dashboard",
-    page_icon="",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Styling & Color Palette
-# Menggunakan palet biru yang selaras untuk tampilan profesional
-THEME_COLOR = "#3182ce"  # Primary Blue
-PLOT_TEMPLATE = "plotly_white"  # Bersih, background putih
+THEME_COLOR = "#3182ce"
+PLOT_TEMPLATE = "plotly_white"
 
 st.markdown("""
     <style>
-        /* Mengatur padding atas agar tidak terlalu renggang */
         .block-container {
             padding-top: 2rem;
             padding-bottom: 2rem;
         }
-        /* Styling kartu metrik agar lebih modern */
         .stMetric {
-            background-color: #000;
+            background-color: #ffffff;
             border: 1px solid #e2e8f0;
             padding: 15px;
             border-radius: 8px;
@@ -33,210 +30,199 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Data Loading
+# Helper Functions untuk Data Processing
+def create_daily_orders_df(df):
+    daily_orders_df = df.resample(rule='D', on='order_purchase_timestamp').agg({
+        "order_id": "nunique",
+        "price": "sum"
+    })
+    daily_orders_df = daily_orders_df.reset_index()
+    daily_orders_df.rename(columns={
+        "order_id": "order_count",
+        "price": "revenue"
+    }, inplace=True)
+    return daily_orders_df
+
+def create_sum_order_items_df(df):
+    sum_order_items_df = df.groupby("product_category_name_english").price.sum().sort_values(ascending=False).reset_index()
+    return sum_order_items_df
+
+def create_rfm_df(df):
+    # RFM sederhana on-the-fly untuk data yang difilter
+    rfm = df.groupby("customer_id").agg({
+        "order_purchase_timestamp": "max",
+        "order_id": "nunique",
+        "price": "sum"
+    }).reset_index()
+    
+    rfm.columns = ["customer_id", "max_order_timestamp", "frequency", "monetary"]
+    
+    # Menghitung Recency
+    max_date = df["order_purchase_timestamp"].max()
+    rfm["recency"] = rfm["max_order_timestamp"].apply(lambda x: (max_date - x).days)
+    
+    return rfm
+
+# Load Data
 @st.cache_data
 def load_data():
-    try:
-        # Load data utama
-        kpi = pd.read_csv("data/kpi_summary.csv")
-        rev_cat = pd.read_csv("data/revenue_by_category.csv")
-        rfm = pd.read_csv("data/rfm_score.csv")
-        cust_seg = pd.read_csv("data/customer_segment.csv")
-        geo = pd.read_csv("data/geo_summary.csv")
-        seller = pd.read_csv("data/seller_performance.csv")
-        payment = pd.read_csv("data/payment_summary.csv")
-        
-        try:
-            reviews = pd.read_csv("data/review_summary.csv")
-        except FileNotFoundError:
-            reviews = pd.DataFrame({'review_score': [1,2,3,4,5], 'avg_price': [0,0,0,0,0]})
+    # Load data gabungan (all_data.csv)
+    all_df = pd.read_csv("data/all_data.csv")
+    
+    # Konversi kolom tanggal ke datetime
+    datetime_columns = ["order_purchase_timestamp", "order_delivered_customer_date"]
+    for column in datetime_columns:
+        if column in all_df.columns:
+            all_df[column] = pd.to_datetime(all_df[column])
             
-        return kpi, rev_cat, rfm, cust_seg, geo, seller, payment, reviews
-    except FileNotFoundError as e:
-        st.error(f"Data tidak ditemukan: {e}. Pastikan file CSV ada di folder 'data/'.")
-        return None, None, None, None, None, None, None, None
+    return all_df
 
-# Inisialisasi Data
-kpi_df, rev_cat_df, rfm_df, cust_seg_df, geo_df, seller_df, payment_df, review_df = load_data()
+all_df = load_data()
 
-if kpi_df is None:
-    st.stop()
-
-# Sidebar
+# ------------------------------------------------------------------------
+# SIDEBAR (FITUR INTERAKTIF - KRITERIA WAJIB)
+# ------------------------------------------------------------------------
 with st.sidebar:
-    st.title("E-Commerce Analyst")
-    st.markdown("**Menu Navigasi**")
-    st.info("Dashboard ini menampilkan hasil analisis performa bisnis, pelanggan, dan operasional.")
+    st.image("https://cdn-icons-png.flaticon.com/512/3081/3081559.png", width=50)
+    st.title("Filter Data")
+    
+    # Filter Rentang Waktu
+    min_date = all_df["order_purchase_timestamp"].min()
+    max_date = all_df["order_purchase_timestamp"].max()
+    
+    start_date, end_date = st.date_input(
+        label='Rentang Waktu',
+        min_value=min_date,
+        max_value=max_date,
+        value=[min_date, max_date]
+    )
 
-# Main Header
-st.title("E-Commerce Analytics Dashboard")
-st.markdown("Ringkasan performa bisnis dan analisis perilaku pelanggan.")
-st.markdown("---")
+# Filter Dataframe Utama berdasarkan Input Sidebar
+main_df = all_df[(all_df["order_purchase_timestamp"] >= str(start_date)) & 
+                 (all_df["order_purchase_timestamp"] <= str(end_date))]
 
-# 1. Business Overview
-st.subheader("Business Performance")
+# Menyiapkan Dataframe Turunan dari Data yang Sudah Difilter
+daily_orders_df = create_daily_orders_df(main_df)
+sum_order_items_df = create_sum_order_items_df(main_df)
+rfm_df = create_rfm_df(main_df)
 
-# KPI Metrics
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Revenue", f"R$ {kpi_df['total_revenue'][0]:,.0f}")
-col2.metric("Total Orders", f"{kpi_df['total_orders'][0]:,}")
-col3.metric("Total Customers", f"{kpi_df['total_customers'][0]:,}")
-col4.metric("Avg. Order Value", f"R$ {kpi_df['average_order_value'][0]:,.2f}")
+# ------------------------------------------------------------------------
+# MAIN DASHBOARD
+# ------------------------------------------------------------------------
+st.header("E-Commerce Dashboard :sparkles:")
+st.markdown("Dashboard ini menampilkan performa penjualan berdasarkan rentang waktu yang dipilih.")
 
-st.markdown("<br>", unsafe_allow_html=True)
+# 1. Business Overview (Metric Cards)
+st.subheader("Daily Orders & Revenue")
 
-# Revenue Chart & Insight
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    total_orders = daily_orders_df.order_count.sum()
+    st.metric("Total Orders", value=total_orders)
+
+with col2:
+    total_revenue = daily_orders_df.revenue.sum()
+    st.metric("Total Revenue", value=f"R$ {total_revenue:,.0f}")
+
+with col3:
+    # Average Order Value (Revenue / Orders)
+    if total_orders > 0:
+        aov = total_revenue / total_orders
+    else:
+        aov = 0
+    st.metric("Average Order Value", value=f"R$ {aov:,.2f}")
+
+# Grafik Tren Harian (Line Chart)
+fig_daily = px.line(
+    daily_orders_df, 
+    x="order_purchase_timestamp", 
+    y="revenue", 
+    title="Tren Pendapatan Harian",
+    template=PLOT_TEMPLATE
+)
+fig_daily.update_traces(line_color=THEME_COLOR)
+st.plotly_chart(fig_daily, use_container_width=True)
+
+# 2. Product Performance
+st.subheader("Best Performing Product Categories")
+
 col_chart, col_insight = st.columns([2, 1])
 
 with col_chart:
-    top_cat = rev_cat_df.head(10).sort_values("price", ascending=True)
+    top_5_cat = sum_order_items_df.head(5)
     
-    fig_rev = px.bar(
-        top_cat,
+    fig_cat = px.bar(
+        top_5_cat,
         x="price",
         y="product_category_name_english",
         orientation="h",
-        title="Top 10 Product Categories by Revenue",
-        labels={"price": "Revenue (R$)", "product_category_name_english": "Category"},
+        title="Top 5 Kategori Produk (Revenue)",
+        labels={"price": "Revenue", "product_category_name_english": "Category"},
         template=PLOT_TEMPLATE
     )
-    # Menyelaraskan warna bar dengan tema
-    fig_rev.update_traces(marker_color=THEME_COLOR)
-    st.plotly_chart(fig_rev, use_container_width=True)
+    fig_cat.update_traces(marker_color=THEME_COLOR)
+    st.plotly_chart(fig_cat, use_container_width=True)
 
 with col_insight:
-    st.markdown("##### Key Insight")
-    best_cat = top_cat.iloc[-1]['product_category_name_english']
-    st.success(f"""
-    **Kategori Unggulan:**
-    
-    Kategori **{best_cat}** menjadi penyumbang pendapatan terbesar.
-    
-    Disarankan untuk memprioritaskan stok dan budget marketing pada kategori ini untuk memaksimalkan profitabilitas.
-    """)
+    st.markdown("##### Insight")
+    if not top_5_cat.empty:
+        best_cat = top_5_cat.iloc[0]['product_category_name_english']
+        st.info(f"""
+        Berdasarkan filter tanggal yang Anda pilih, kategori **{best_cat}** memiliki performa penjualan terbaik.
+        """)
+    else:
+        st.warning("Tidak ada data pada rentang tanggal ini.")
 
-st.markdown("---")
+# 3. Customer Demographics (RFM & Geo)
+st.subheader("Customer Intelligence")
+tab1, tab2 = st.tabs(["RFM Analysis", "Geographic Distribution"])
 
-# 2. Detailed Analysis Tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Customer Intelligence",
-    "Payment & Reviews",
-    "Geography",
-    "Seller Performance"
-])
-
-# Tab 1: Customer Intelligence
 with tab1:
-    st.subheader("Analisis Pelanggan (RFM & Segmentasi)")
+    col_rfm1, col_rfm2 = st.columns(2)
     
-    col_rfm, col_seg = st.columns(2)
-    
-    with col_rfm:
-        # Boxplot RFM
-        fig_recency = px.box(
+    with col_rfm1:
+        st.markdown("**Distribusi Recency**")
+        fig_recency = px.histogram(
             rfm_df, 
-            y="recency", 
-            title="Distribusi Recency (Hari sejak pembelian terakhir)",
+            x="recency", 
+            nbins=30, 
+            title="Seberapa baru pelanggan bertransaksi?",
             template=PLOT_TEMPLATE
         )
         fig_recency.update_traces(marker_color=THEME_COLOR)
         st.plotly_chart(fig_recency, use_container_width=True)
         
-    with col_seg:
-        # Bar Chart Segmentasi
-        seg_counts = cust_seg_df['monetary_segment'].value_counts().reset_index()
-        seg_counts.columns = ['segment', 'count']
-        
-        fig_seg = px.bar(
-            seg_counts,
-            x='segment',
-            y='count',
-            title="Jumlah Pelanggan per Segmen Nilai",
-            text='count',
+    with col_rfm2:
+        st.markdown("**Distribusi Monetary**")
+        fig_monetary = px.histogram(
+            rfm_df, 
+            x="monetary", 
+            nbins=30, 
+            title="Sebaran Nilai Belanja Pelanggan",
             template=PLOT_TEMPLATE
         )
-        fig_seg.update_traces(marker_color=THEME_COLOR)
-        st.plotly_chart(fig_seg, use_container_width=True)
+        fig_monetary.update_traces(marker_color=THEME_COLOR)
+        st.plotly_chart(fig_monetary, use_container_width=True)
 
-# Tab 2: Payment & Satisfaction
 with tab2:
-    col_pay, col_rev = st.columns(2)
+    st.markdown("**Sebaran Lokasi Pelanggan (Top 10 States)**")
     
-    with col_pay:
-        st.subheader("Metode Pembayaran")
-        # Mencari kolom value secara dinamis
-        val_col = [c for c in payment_df.columns if 'val' in c or 'price' in c or 'sum' in c][0]
-        
-        fig_pay = px.pie(
-            payment_df,
-            values=val_col,
-            names=payment_df.columns[0],
-            title="Proporsi Tipe Pembayaran",
-            hole=0.4,
-            template=PLOT_TEMPLATE,
-            color_discrete_sequence=px.colors.sequential.Blues_r
-        )
-        st.plotly_chart(fig_pay, use_container_width=True)
-
-    with col_rev:
-        st.subheader("Hubungan Rating & Harga")
-        fig_sat = px.bar(
-            review_df,
-            x="review_score",
-            y="avg_price",
-            title="Rata-rata Transaksi berdasarkan Rating",
-            labels={"avg_price": "Avg Value", "review_score": "Rating"},
-            template=PLOT_TEMPLATE
-        )
-        fig_sat.update_traces(marker_color=THEME_COLOR)
-        st.plotly_chart(fig_sat, use_container_width=True)
-
-# Tab 3: Geography
-with tab3:
-    st.subheader("Sebaran Lokasi Pelanggan")
+    # Menghitung geo berdasarkan data yang difilter
+    by_state = main_df.groupby("customer_state").customer_id.nunique().reset_index()
+    by_state.rename(columns={"customer_id": "customer_count"}, inplace=True)
+    top_states = by_state.sort_values(by="customer_count", ascending=False).head(10)
     
-    col_geo, col_desc = st.columns([2, 1])
-    
-    with col_geo:
-        geo_x = geo_df.columns[0]
-        geo_y = geo_df.columns[1]
-        top_geo = geo_df.sort_values(geo_y, ascending=False).head(10)
-        
-        fig_geo = px.bar(
-            top_geo,
-            x=geo_y,
-            y=geo_x,
-            orientation='h',
-            title="Top 10 Wilayah Pelanggan",
-            template=PLOT_TEMPLATE
-        )
-        fig_geo.update_traces(marker_color=THEME_COLOR)
-        st.plotly_chart(fig_geo, use_container_width=True)
-        
-    with col_desc:
-        st.info("Wilayah teratas menunjukkan area dengan densitas pelanggan tertinggi, cocok untuk fokus ekspansi logistik.")
-
-# Tab 4: Seller Performance
-with tab4:
-    st.subheader("Performa Penjual")
-    
-    # Deteksi kolom numerik
-    num_cols = seller_df.select_dtypes(include=['number']).columns
-    col_ord = num_cols[0]
-    col_rev = num_cols[1] if len(num_cols) > 1 else num_cols[0]
-    
-    fig_seller = px.scatter(
-        seller_df,
-        x=col_ord,
-        y=col_rev,
-        title="Sebaran Performa Seller (Order vs Revenue)",
-        labels={col_ord: "Total Orders", col_rev: "Total Revenue"},
-        opacity=0.6,
+    fig_geo = px.bar(
+        top_states,
+        x="customer_count",
+        y="customer_state",
+        orientation="h",
+        title="Jumlah Pelanggan per Negara Bagian",
         template=PLOT_TEMPLATE
     )
-    fig_seller.update_traces(marker_color=THEME_COLOR)
-    st.plotly_chart(fig_seller, use_container_width=True)
+    fig_geo.update_traces(marker_color=THEME_COLOR)
+    st.plotly_chart(fig_geo, use_container_width=True)
 
 # Footer
-st.markdown("---")
-st.caption("© 2024 E-Commerce Analytics Project")
+st.caption("Copyright © Dicoding 2024")
